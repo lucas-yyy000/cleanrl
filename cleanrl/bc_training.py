@@ -17,13 +17,8 @@ import numpy as np
 import pickle
 import gymnasium as gym
 from gymnasium import spaces
-
-from imitation.algorithms import bc
-from imitation.data.types import Trajectory, DictObs
-from imitation.util.util import save_policy
-
-from stable_baselines3.common import policies
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
 
 from radar_maps.env.radar_map_double_integrator import RadarMap_DoubleIntegrator
 
@@ -86,7 +81,7 @@ def generate_training_data(traj, ctr, path_mm, radars, detection_range, grid_siz
         # print(heat_map_img.shape)
         x_cur_normalized = np.array([x_cur[0]/1200.0, x_cur[1]/v_lim, x_cur[2]/1200.0, x_cur[3]/v_lim])
 
-        observation = DictObs({"state": x_cur_normalized, "img": heat_map_img})
+        observation = {"state": x_cur_normalized, "img": heat_map_img}
         observations.append(observation)
         if i < len(traj) - 1:
             action_prediction = []
@@ -100,6 +95,34 @@ def generate_training_data(traj, ctr, path_mm, radars, detection_range, grid_siz
     
     return np.array(observations), np.array(actions)
 
+class TrajDataset(Dataset):
+    def __init__(self, trajs):
+        states = []
+        actions = []
+        for traj in trajs:
+            states.append(traj.obs)
+            actions.append(traj.actions)
+        self.states = np.concatenate(states, axis=0)
+        self.actions = np.concatenate(actions, axis=0)
+
+    def __len__(self):
+        return self.states.shape[0]
+
+    def __getitem__(self, idx):
+        sample = dict()
+        sample['state'] = self.states[idx]
+        sample['action'] = self.actions[idx]
+        return sample
+    
+    def add_traj(self, traj=None, states=None, actions=None):
+        if traj is not None:
+            self.states = np.concatenate((self.states, traj.obs), axis=0)
+            self.actions = np.concatenate((self.actions, traj.actions), axis=0)
+        else:
+            self.states = np.concatenate((self.states, states), axis=0)
+            self.actions = np.concatenate((self.actions, actions), axis=0)            
+
+
 def process_data(detection_range, grid_size, v_lim, u_lim):
     bc_data = []
     for i in range(data_num):
@@ -112,7 +135,7 @@ def process_data(detection_range, grid_size, v_lim, u_lim):
             path_mm = pickle.load(handle)
 
         obs, acts = generate_training_data(traj, control, path_mm, radar_config, detection_range, grid_size, v_lim, u_lim)
-        bc_traj = Trajectory(obs, acts, infos=None, terminal=True)
+        bc_traj = (obs, acts, infos=None, terminal=True)
         bc_data.append(bc_traj)
     return bc_data
 
@@ -150,7 +173,7 @@ class NatureCNN(nn.Module):
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         return self.linear(self.cnn(observations))
 
-class FeatureExtractor(BaseFeaturesExtractor):
+class FeatureExtractor():
     def __init__(
         self,
         observation_space: gym.spaces.Dict,
@@ -208,37 +231,6 @@ class BCAgent(nn.Module):
         return action, self.critic(x)
     
 
-def bc_train():
-    rng = np.random.default_rng(0)
-    size_of_map = 1000
-    detection_range = 300
-    grid_size = 5
-
-    v_lim = 20.0
-    u_lim = 2.0
-    env = RadarMap_DoubleIntegrator(size_of_map, [size_of_map, size_of_map], detection_range, grid_size, dist_between_radars=size_of_map/5.0, num_radars=10)
-
-    transitions = process_data(detection_range, grid_size, v_lim, u_lim)
-    # print(type(transitions))
-    
-    policy_ac = policies.MultiInputActorCriticPolicy(observation_space=env.observation_space,
-                                                    action_space=env.action_space,
-                                                    lr_schedule=lambda _: 1e-3,
-                                                     net_arch=[dict(pi=[64, 64],
-                                                          vf=[64, 64])],
-                                                    activation_fn=torch.nn.ReLU,
-                                                    features_extractor_class=FeatureExtractor)
-    bc_trainer = bc.BC(
-        rng = rng,
-        observation_space=env.observation_space,
-        action_space=env.action_space,
-        demonstrations=transitions,
-        policy=policy_ac,
-        device='cuda'
-    )
-    
-    bc_trainer.train(n_epochs=50)
-    save_policy(bc_trainer.policy, 'bc_policy.zip')
 
 if __name__ == "__main__":
     bc_train()
