@@ -1,0 +1,14 @@
+---
+v: 20.0           # Speed of the agent. 
+z: 100.0              # Z coordinate of the agent.
+
+T_horizon: 20.0        # Planning horizon (s).
+N_horizon: 40          # Planning time steps.
+u_lim: 2.0                     # Input limit.
+
+num_modes: 3 # Number of modes.
+noise_level: 30.0
+
+size_of_map: 1000         
+x_f: "np.array([size_of_map, size_of_map])"
+x_0: "np.array([100.0*np.random.rand(1)[0], 0, 100.0*np.random.rand(1)[0], 0])"
